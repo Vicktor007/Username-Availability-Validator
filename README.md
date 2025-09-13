@@ -28,7 +28,7 @@ This project is a **Spring Boot service** that validates whether a given usernam
 **Workflow:**
 
 * Check Bloom filter → quick rejection if username is definitely not available.
-* Query Redis cache → trust "taken", verify "available".
+* Query Redis cache → trust if the username is "taken", verify if the username is "available".
 * Query database if necessary → update Redis cache accordingly.
 
 **Benefits:**
