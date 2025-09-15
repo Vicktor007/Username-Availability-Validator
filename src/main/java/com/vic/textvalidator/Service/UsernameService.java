@@ -1,83 +1,126 @@
 package com.vic.textvalidator.Service;
 
-
-import com.vic.textvalidator.BloomFilter.UsernameBloomFilter;
+import com.vic.textvalidator.DataInitialization.DataSeeder;
 import com.vic.textvalidator.Models.UserAccount;
 import com.vic.textvalidator.Repository.UserAccountRepository;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
 import org.springframework.stereotype.Service;
 
-import java.util.Objects;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
 
 @Service
 public class UsernameService {
 
     private final UserAccountRepository userAccountRepository;
 
-    private final UsernameBloomFilter bloomFilter;
 
     private final CacheManager cacheManager;
 
-    public UsernameService(UserAccountRepository userAccountRepository, UsernameBloomFilter bloomFilter, CacheManager cacheManager) {
+    private final DataSeeder dataSeeder;
+
+    private static final List<String> WORD_SUFFIXES = List.of(
+            "dev", "pro", "x", "official", "hub", "code"
+    );
+
+    private final Random random = new Random();
+
+    public UsernameService(UserAccountRepository userAccountRepository, CacheManager cacheManager, DataSeeder dataSeeder) {
         this.userAccountRepository = userAccountRepository;
-        this.bloomFilter = bloomFilter;
         this.cacheManager = cacheManager;
+        this.dataSeeder = dataSeeder;
     }
 
 
     public boolean checkUsername(String username) {
-        // Step 1: Bloom filter quick check
-        if (bloomFilter.mightContain(username)) {
+        // Bloom filter quick check
+        if (dataSeeder.mightContain(username)) {
             System.out.println("🚫 Bloom filter: " + username + " is probably taken.");
 
-            // Step 2: Check Redis cache
-            Cache cache = cacheManager.getCache("usernameCheck");
-            Boolean cached = (cache != null) ? cache.get(username, Boolean.class) : null;
+                Cache cache = cacheManager.getCache("usernameCheck");
 
-            if (cached != null) {
-                System.out.println("⚡ Cache hit: " + username + " availability = " + cached);
-                // If cache says taken -> trust it
-                if (!cached) {
-                    return false;
-                }
-                // If cache says available -> confirm with DB
-            }
 
-            // Step 3: Fallback to DB
-            boolean available = !userAccountRepository.existsByUsername(username);
-            Objects.requireNonNull(cacheManager.getCache("usernameCheck")).put(username, available);
+                if (cache == null) return true; // if no cache, assume available
 
-            if (available) {
-                System.out.println(username + " ✅ is available (after DB check).");
-            } else {
-                System.out.println(username + " ❌ is taken (after DB check).");
-            }
-            return available;
+               if (cache.get(username) != null){
+
+                   System.out.println("❌ " + username + " is taken.");  // not null → in cache → taken
+                   return false;
+               } else {
+                   System.out.println("✅" + username + " is available."); // null → not in cache → available
+                   return true;
+               }
         }
 
-        // Bloom says it's not seen before → likely available,
-        // but double-check DB to avoid false negatives
-        boolean available = !userAccountRepository.existsByUsername(username);
-        Objects.requireNonNull(cacheManager.getCache("usernameCheck")).put(username, available);
+        // Step 2: If bloom filter says "definitely not present", then it's available
+        System.out.println("✅ Bloom filter: " + username + " definitely not taken.");
+        return true;
 
-        if (available) {
-            System.out.println(username + " ✅ is available (Bloom filter miss + DB check).");
-        } else {
-            System.out.println(username + " ❌ is taken (Bloom filter miss + DB check).");
-        }
-
-        return available;
     }
 
 
-    // Register user → add to DB, Bloom, and Redis cache
-    public void registerUser(String username) {
+    public UserAccount registerUser(String username) {
+        if (!checkUsername(username)) {
+            throw new IllegalArgumentException("Username already taken!");
+        }
+
         UserAccount user = new UserAccount();
         user.setUsername(username);
         userAccountRepository.save(user);
 
-        bloomFilter.add(username);
-        Objects.requireNonNull(cacheManager.getCache("usernameCheck")).put(username, false); // now taken
+        dataSeeder.addToBloom(username);
+
+        Cache cache = cacheManager.getCache("usernameCheck");
+        if (cache != null) {
+            cache.put(username, Boolean.TRUE); // mark username as taken
+        }
+
+        return user;
     }
+
+
+    public List<String> SuggestUsernames(String baseUsername, int limit) {
+        List<String> suggestions = new ArrayList<>();
+        int year = LocalDate.now().getYear();
+
+        Cache cache = cacheManager.getCache("usernameCheck");
+        if (cache == null) {
+            throw new IllegalStateException("Cache 'usernameCheck' is not available");
+        }
+
+        // Helper function to check cache quickly
+        java.util.function.Predicate<String> isAvailable = candidate ->
+                cache.get(candidate) == null; // null = available, not null = taken
+
+        // Try word-based suffixes
+        for (String word : WORD_SUFFIXES) {
+            if (suggestions.size() >= limit) break;
+            String candidate = baseUsername + "_" + word;
+            if (isAvailable.test(candidate)) {
+                suggestions.add(candidate);
+            }
+        }
+
+        // Try year-based
+        if (suggestions.size() < limit) {
+            String candidate = baseUsername + year;
+            if (isAvailable.test(candidate)) {
+                suggestions.add(candidate);
+            }
+        }
+
+        // Try random numbers until filled
+        while (suggestions.size() < limit) {
+            String candidate = baseUsername + (random.nextInt(9000) + 1000); // 4-digit number
+            if (isAvailable.test(candidate) && !suggestions.contains(candidate)) {
+                suggestions.add(candidate);
+            }
+        }
+
+        return suggestions;
+    }
+
 }
