@@ -1,7 +1,7 @@
 
 ---
 
-### 📌 Project Description: Username Availability Validator (Spring Boot + Bloom Filter + Redis)
+### Username Availability Validator (Spring Boot + Bloom Filter + Redis)
 
 This project is a **Spring Boot service** that validates whether a given username is available or already taken. It is designed for **high-performance username checks** by combining a **Bloom filter**, **Redis cache**, and a **SQLite database**.
 
